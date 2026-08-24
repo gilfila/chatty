@@ -1,0 +1,5 @@
+// CsWin32 requests — UI Automation client surface for focused-field classification.
+IUIAutomation
+IUIAutomationElement
+CUIAutomation
+UIA_CONTROLTYPE_ID

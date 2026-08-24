@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="Flow.Windows"
+    Publisher="CN=Flow Local Development"
+    Version="0.1.0.0" />
+
+  <Properties>
+    <DisplayName>Flow</DisplayName>
+    <PublisherDisplayName>Flow (local development)</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Windows 11 24H2 (build 26100): required for on-device streaming speech. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Flow" Executable="Flow.Windows.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Flow"
+        Description="Hold-to-talk dictation. Audio stays on this device and is never stored."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Deliberately minimal: no network capability — audio and transcripts never leave
+         the device. VALIDATE ON WINDOWS: exact namespace/name for the on-device model
+         capability (systemAIModels) against Windows App SDK 1.7.1+ docs. -->
+    <rescap:Capability Name="systemAIModels" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

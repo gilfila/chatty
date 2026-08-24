@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>Flow for Windows — tray panel</title>
+<style>
+/* ------------------------------------------------------------------
+   Flow for Windows — panel prototype
+   Fluent (Windows 11) only. No macOS idiom, no web-dashboard idiom.
+   Every state here is produced by PanelPresenter.Present() in
+   src/Flow.Shell.Core/PanelPresenter.cs — the copy is copied from it
+   verbatim so the design and the code cannot drift apart silently.
+------------------------------------------------------------------ */
+
+:root {
+  /* Windows 11 default accent, and the four Fluent status colours. */
+  --accent:        #0078D4;
+  --accent-hover:  #106EBE;
+  --status-rec:    #C42B1C;
+  --status-good:   #0F7B0F;
+  --status-warn:   #9D5D00;
+  --status-bad:    #C42B1C;
+
+  --radius-flyout: 8px;   /* Windows 11 flyout */
+  --radius-ctl:    4px;   /* Windows 11 control */
+  --taskbar-h:     48px;
+
+  --ease-out: cubic-bezier(0, 0, 0, 1);          /* Fluent decelerate */
+  --dur-fast: 150ms;
+  --dur-mid:  250ms;
+}
+
+/* Fluent dark — the default, and what a tray flyout looks like at night. */
+html[data-theme="dark"] {
+  --panel-bg:      rgba(44, 44, 44, .90);
+  --panel-stroke:  rgba(255, 255, 255, .09);
+  --text-1:        #FFFFFF;
+  --text-2:        rgba(255, 255, 255, .79);
+  --text-3:        rgba(255, 255, 255, .54);
+  --fill-subtle:   rgba(255, 255, 255, .06);
+  --fill-stroke:   rgba(255, 255, 255, .09);
+  --taskbar-bg:    rgba(32, 32, 32, .86);
+  --accent-text:   #FFFFFF;
+  --status-good:   #6CCB5F;
+  --status-warn:   #FCE100;
+  --status-bad:    #FF99A4;
+  --status-rec:    #FF99A4;
+}
+
+html[data-theme="light"] {
+  --panel-bg:      rgba(249, 249, 249, .93);
+  --panel-stroke:  rgba(0, 0, 0, .08);
+  --text-1:        #1B1B1B;
+  --text-2:        rgba(0, 0, 0, .62);
+  --text-3:        rgba(0, 0, 0, .45);
+  --fill-subtle:   rgba(0, 0, 0, .04);
+  --fill-stroke:   rgba(0, 0, 0, .07);
+  --taskbar-bg:    rgba(243, 243, 243, .88);
+  --accent-text:   #FFFFFF;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* Segoe UI Variable is the Windows 11 UI face; the rest is the fallback ladder. */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  background: #101014;
+  color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ================================================================
+   The panel itself
+   ================================================================ */
+
+.panel {
+  width: 360px;
+  border-radius: var(--radius-flyout);
+  background: var(--panel-bg);
+  /* Acrylic. Windows composites this against the desktop behind it. */
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  border: 1px solid var(--panel-stroke);
+  box-shadow: 0 8px 16px rgba(0,0,0,.28), 0 0 1px rgba(0,0,0,.4);
+  padding: 12px 14px 13px;
+  animation: panel-in var(--dur-mid) var(--ease-out) both;
+}
+
+/* Fluent entrance: short, decelerating, and it rises toward the cursor's
+   attention rather than dropping onto it. */
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* The state dot is never the only signal — the headline beside it always
+   says the same thing in words. */
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
+}
+.t-listening .dot { background: var(--status-rec); animation: pulse 1.6s ease-in-out infinite; }
+.t-working   .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.t-success   .dot { background: var(--status-good); }
+.t-caution   .dot { background: var(--status-warn); }
+.t-error     .dot { background: var(--status-bad); }
+
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+.headline {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  line-height: 18px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Three-bar waveform. Restrained on purpose: it must read as "hearing you"
+   from the corner of the eye without ever pulling the eye to it. */
+.wave { display: flex; align-items: center; gap: 2.5px; height: 14px; flex: none; }
+.wave i {
+  display: block;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--status-rec);
+  animation: bar 900ms var(--ease-out) infinite;
+}
+.wave i:nth-child(1) { height: 6px;  animation-delay: 0ms; }
+.wave i:nth-child(2) { height: 13px; animation-delay: 140ms; }
+.wave i:nth-child(3) { height: 8px;  animation-delay: 280ms; }
+@keyframes bar { 0%,100% { transform: scaleY(.45) } 50% { transform: scaleY(1) } }
+
+.detail {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+/* The transcript. Provisional text is dimmed and italicised so a half-finished
+   sentence never looks like a finished one. */
+.body {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius-ctl);
+  background: var(--fill-subtle);
+  border: 1px solid var(--fill-stroke);
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--text-1);
+  max-height: 68px;
+  overflow: hidden;
+}
+.body.provisional { color: var(--text-3); font-style: italic; }
+.body .caret {
+  display: inline-block;
+  width: 1.5px; height: 12px;
+  background: var(--status-rec);
+  margin-left: 2px;
+  vertical-align: -1px;
+  animation: blink 1s steps(1) infinite;
+}
+@keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+
+/* Exactly one action, or none. */
+.actions { margin-top: 10px; display: flex; }
+.btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background var(--dur-fast) var(--ease-out), transform 80ms var(--ease-out);
+}
+.btn:hover  { background: var(--accent-hover); }
+.btn:active { transform: scale(.97); }
+.btn.secondary {
+  background: var(--fill-subtle);
+  border-color: var(--fill-stroke);
+  color: var(--text-1);
+}
+
+/* Progress for the one setup step that is a download rather than a decision. */
+.progress {
+  margin-top: 9px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--fill-subtle);
+  overflow: hidden;
+}
+.progress b { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+
+/* ================================================================
+   Mock Windows 11 desktop, so the anchoring can be judged in place
+   ================================================================ */
+
+.stage {
+  position: relative;
+  height: 560px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 78% 12%, #2B5B8C 0%, transparent 55%),
+    radial-gradient(100% 80% at 12% 82%, #3E2C63 0%, transparent 60%),
+    linear-gradient(150deg, #0C1A2B 0%, #14243A 45%, #0A0F1A 100%);
+}
+
+.taskbar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: var(--taskbar-h);
+  background: var(--taskbar-bg);
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  border-top: 1px solid rgba(255,255,255,.06);
+  display: flex; align-items: center;
+}
+/* Windows 11 centres the app icons and keeps the clock hard right. */
+.taskbar .apps { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+.taskbar .apps span {
+  width: 30px; height: 30px; border-radius: 6px;
+  background: rgba(255,255,255,.10);
+}
+.taskbar .tray {
+  position: absolute; right: 0; height: 100%;
+  display: flex; align-items: center; gap: 12px; padding-right: 14px;
+}
+.tray .icon { width: 15px; height: 15px; opacity: .8; color: #fff; }
+/* Flow's own tray icon — the anchor the panel points at. */
+.tray .flow-icon {
+  width: 26px; height: 26px; border-radius: 5px;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,.14);
+  outline: 1.5px solid var(--status-rec);
+  outline-offset: -1.5px;
+  color: #fff;
+}
+.tray .clock {
+  font-size: 11.5px; line-height: 14px; color: #fff; text-align: right; opacity: .95;
+}
+
+/* Anchored above the tray icon, 12px clear of the taskbar and the screen edge.
+   NOT top-right: Windows 11 puts the clock at the bottom-right. */
+.anchored {
+  position: absolute;
+  right: 12px;
+  bottom: calc(var(--taskbar-h) + 12px);
+}
+
+.callout {
+  position: absolute; left: 34px; bottom: 96px;
+  max-width: 300px;
+  font-size: 12px; line-height: 18px; color: rgba(255,255,255,.62);
+}
+.callout b { color: #fff; font-weight: 600; }
+
+/* ================================================================
+   Gallery
+   ================================================================ */
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px 72px; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -.02em; margin: 40px 0 6px; }
+h2 { font-size: 15px; font-weight: 600; margin: 44px 0 4px; }
+.sub { color: var(--text-3); font-size: 13px; line-height: 20px; margin: 0 0 20px; max-width: 760px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(392px, 1fr)); gap: 26px; }
+.cell { }
+.cell .label { font-size: 11px; color: var(--text-3); margin-bottom: 9px; font-variant: all-small-caps; letter-spacing: .06em; }
+.cell .label b { color: var(--text-2); font-weight: 600; }
+/* Panels in the gallery sit on a neutral plate so acrylic still has something to sample. */
+.plate {
+  padding: 16px;
+  border-radius: 12px;
+  background: linear-gradient(140deg, #223449, #1A2233);
+}
+.plate.lightplate { background: linear-gradient(140deg, #C9D6E4, #E7EDF4); }
+
+.note { font-size: 11.5px; line-height: 17px; color: var(--text-3); margin-top: 9px; }
+.note code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; color: var(--text-2); }
+</style>
+</head>
+<body>
+
+<!-- ============ In place, on a mock Windows 11 desktop ============ -->
+<div class="stage">
+  <div class="callout">
+    <b>Anchored to the Flow tray icon</b> — 12&nbsp;px clear of the taskbar and the screen edge,
+    and it never takes focus, so the text field you were typing in stays the text field Flow
+    pastes into.
+  </div>
+
+  <div class="anchored">
+    <div class="panel t-listening">
+      <div class="row">
+        <span class="dot"></span>
+        <span class="headline">Listening</span>
+        <span class="wave"><i></i><i></i><i></i></span>
+      </div>
+      <div class="detail">Release to insert · Esc to cancel</div>
+      <div class="body provisional">let's move the review to Thursday and I'll send the deck<span class="caret"></span></div>
+    </div>
+  </div>
+
+  <div class="taskbar">
+    <div class="apps"><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="tray">
+      <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+        <path d="M2 12h12M4 9.5v2.5M7 6v6M10 3.5v8.5M13 7v5"/>
+      </svg>
+      <div class="flow-icon">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 1.5a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0v-4a2 2 0 0 1 2-2z"/>
+          <path d="M4 7.2a.6.6 0 0 1 1.2 0 2.8 2.8 0 0 0 5.6 0 .6.6 0 0 1 1.2 0 4 4 0 0 1-3.4 3.95V13h1.6a.6.6 0 0 1 0 1.2H5.8a.6.6 0 0 1 0-1.2h1.6v-1.85A4 4 0 0 1 4 7.2z"/>
+        </svg>
+      </div>
+      <div class="clock">2:14 PM<br>24/08/2026</div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h1>Flow for Windows — tray panel</h1>
+  <p class="sub">
+    Every state below is what <code>PanelPresenter.Present()</code> returns, rendered. The headline,
+    detail and button label are copied from the presenter verbatim, so a change to the copy in code
+    shows up here as a diff rather than as drift.
+  </p>
+
+  <h2>First run</h2>
+  <p class="sub">
+    The only thing a new user has to learn is one gesture. The card names whichever key is actually
+    bound, and retires the moment the gesture works &mdash; not after a fixed number of launches.
+  </p>
+  <div class="grid">
+    <div class="cell">
+      <div class="label"><b>First run</b> &mdash; teaches the shortcut</div>
+      <div class="plate">
+        <div class="panel t-idle">
+          <div class="row"><span class="dot"></span><span class="headline">Hold Right Ctrl to dictate</span></div>
+          <div class="detail">Hold it down, say something, then let go. Flow types it where your cursor already is.</div>
+          <div class="actions"><button class="btn secondary">Change shortcut</button></div>
+        </div>
+      </div>
+      <p class="note">Right Ctrl, not right Alt: on international layouts right Alt is AltGr, so
+      holding it would type characters into the field while you speak. Change shortcut cycles a
+      short vetted list &mdash; every option types nothing, toggles nothing, and opens nothing.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>First run</b> &mdash; setup outranks the lesson</div>
+      <div class="plate">
+        <div class="panel t-error">
+          <div class="row"><span class="dot"></span><span class="headline">Microphone blocked</span></div>
+          <div class="detail">Flow needs the microphone to hear you. Audio is turned into text on this
+            PC and is never saved or uploaded.</div>
+          <div class="actions"><button class="btn">Open microphone settings</button></div>
+        </div>
+      </div>
+      <p class="note">Teaching a gesture that cannot work yet is worse than saying nothing, so a
+      setup problem replaces the card until it is fixed.</p>
+    </div>
+  </div>
+
+  <h2>While you are speaking</h2>
+  <p class="sub">The only two states the user sees on a good day.</p>
+  <div class="grid">
+
+    <div class="cell">
+      <div class="label"><b>Listening</b> — normal editable target</div>
+      <div class="plate">
+        <div class="panel t-listening">
+          <div class="row">
+            <span class="dot"></span>
+            <span class="headline">Listening</span>
+            <span class="wave"><i></i><i></i><i></i></span>
+          </div>
+          <div class="detail">Release to insert · Esc to cancel</div>
+          <div class="body provisional">let's move the review to Thursday<span class="caret"></span></div>
+        </div>
+      </div>
+      <p class="note">Partial text is dimmed and italic, and no button is offered over it — Flow never
+      hands you a sentence that is still changing.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Listening</b> — administrator window, warned up front</div>
+      <div class="plate">
+        <div class="panel t-caution">
+          <div class="row">
+            <span class="dot"></span>
+            <span class="headline">Listening</span>
+            <span class="wave"><i></i><i></i><i></i></span>
+          </div>
+          <div class="detail">Registry Editor runs as administrator, so Windows blocks typing into it.
+            Flow will keep the text for Copy last.</div>
+          <div class="body provisional">set the timeout to thirty seconds<span class="caret"></span></div>
+        </div>
+      </div>
+      <p class="note">Windows will not deliver injected input to a higher-integrity window, and Flow
+      will not ask to be elevated just to paste. That is knowable the instant you press — so it is
+      said then, not after you have spoken a paragraph.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Finalizing</b></div>
+      <div class="plate">
+        <div class="panel t-working">
+          <div class="row">
+            <span class="dot"></span>
+            <span class="headline">Turning that into text…</span>
+          </div>
+          <div class="body provisional">let's move the review to Thursday and I'll send the deck</div>
+        </div>
+      </div>
+      <p class="note">The waveform stops the moment Flow stops hearing you.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Inserted</b> — fades after 1.6&nbsp;s</div>
+      <div class="plate">
+        <div class="panel t-success">
+          <div class="row">
+            <span class="dot"></span>
+            <span class="headline">Inserted</span>
+          </div>
+          <div class="detail">Inserted.</div>
+          <div class="body">let's move the review to Thursday and I'll send the deck</div>
+        </div>
+      </div>
+      <p class="note">Nothing is at stake, so it gets out of the way on its own.</p>
+    </div>
+  </div>
+
+  <h2>When Flow keeps the text instead of typing it</h2>
+  <p class="sub">
+    Every one of these holds the only copy of what you said. All of them offer Copy&nbsp;last, and
+    none of them auto-dismiss — asserted across every reachable state in
+    <code>APanelOfferingCopyLast_NeverTimesOut</code>.
+  </p>
+  <div class="grid">
+
+    <div class="cell">
+      <div class="label"><b>Focus moved</b></div>
+      <div class="plate">
+        <div class="panel t-caution">
+          <div class="row"><span class="dot"></span><span class="headline">Saved, not typed</span></div>
+          <div class="detail">Focus moved to a different field, so Flow did not type there. Use Copy last.</div>
+          <div class="body">let's move the review to Thursday and I'll send the deck</div>
+          <div class="actions"><button class="btn">Copy last</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Administrator target</b></div>
+      <div class="plate">
+        <div class="panel t-caution">
+          <div class="row"><span class="dot"></span><span class="headline">Saved, not typed</span></div>
+          <div class="detail">That app runs as administrator, so Windows blocks typing into it. Use Copy last.</div>
+          <div class="body">set the timeout to thirty seconds</div>
+          <div class="actions"><button class="btn">Copy last</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Paste not accepted</b></div>
+      <div class="plate">
+        <div class="panel t-caution">
+          <div class="row"><span class="dot"></span><span class="headline">Saved, not typed</span></div>
+          <div class="detail">The app did not accept the paste. Use Copy last.</div>
+          <div class="body">let's move the review to Thursday</div>
+          <div class="actions"><button class="btn">Copy last</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Password field</b> — nothing typed, nothing kept</div>
+      <div class="plate">
+        <div class="panel t-idle">
+          <div class="row"><span class="dot"></span><span class="headline">Not kept</span></div>
+          <div class="detail">That was a password field. Flow did not type or keep it.</div>
+        </div>
+      </div>
+      <p class="note">The one target Flow refuses to listen to at all. No transcript, no history row,
+      no Copy last — recovering a password would be worse than losing it.</p>
+    </div>
+  </div>
+
+  <h2>When Flow breaks your clipboard</h2>
+  <p class="sub">
+    Flow borrows the clipboard to paste, so it owes it back. When the restore fails, the snapshot
+    it is holding is the only copy of what you had &mdash; so this outranks every other panel,
+    including setup, and never auto-dismisses.
+  </p>
+  <div class="grid">
+    <div class="cell">
+      <div class="label"><b>Restore clipboard</b> &mdash; outranks everything</div>
+      <div class="plate">
+        <div class="panel t-caution">
+          <div class="row"><span class="dot"></span><span class="headline">Your clipboard needs restoring</span></div>
+          <div class="detail">Flow borrowed your clipboard to paste and could not put it back.
+            Your transcript is in the Flow menu.</div>
+          <div class="actions"><button class="btn">Restore clipboard</button></div>
+        </div>
+      </div>
+      <p class="note">Only one action fits, and the user's own data outranks Flow's output &mdash;
+      so the detail line says where the transcript went rather than stranding it silently. The
+      contents are never rendered: whatever was copied could be a password.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Superseded</b> &mdash; someone else copied first</div>
+      <div class="plate">
+        <div class="panel t-idle">
+          <div class="row"><span class="dot"></span><span class="headline">Clipboard already changed</span></div>
+          <div class="detail">Something else copied since then, so Flow left it alone.</div>
+        </div>
+      </div>
+      <p class="note">A foreign write retires the repair untouched. Overwriting a deliberate copy
+      would be exactly the data loss the repair exists to prevent, so Flow says so rather than
+      silently giving up.</p>
+    </div>
+  </div>
+
+  <h2>Setup and failure</h2>
+  <p class="sub">A shortcut that silently does nothing is the one failure this app must never have.</p>
+  <div class="grid">
+
+    <div class="cell">
+      <div class="label"><b>Shortcut not working</b> — outranks everything</div>
+      <div class="plate">
+        <div class="panel t-error">
+          <div class="row"><span class="dot"></span><span class="headline">Shortcut not working</span></div>
+          <div class="detail">Flow could not watch for your shortcut, so hold-to-talk will not respond.</div>
+          <div class="actions"><button class="btn">Try again</button></div>
+        </div>
+      </div>
+      <p class="note">A keyboard hook that failed to install looks exactly like a working one until
+      you hold the key. It is shown above even a model download for that reason.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Model downloading</b></div>
+      <div class="plate">
+        <div class="panel t-working">
+          <div class="row"><span class="dot"></span><span class="headline">Getting speech ready</span></div>
+          <div class="detail">Windows is downloading the on-device model — 42%.</div>
+          <div class="progress"><b style="width:42%"></b></div>
+        </div>
+      </div>
+      <p class="note">Readiness is visible before the first press, as the plan requires.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Microphone blocked</b></div>
+      <div class="plate">
+        <div class="panel t-error">
+          <div class="row"><span class="dot"></span><span class="headline">Microphone blocked</span></div>
+          <div class="detail">Flow needs the microphone to hear you. Audio is turned into text on this
+            PC and is never saved or uploaded.</div>
+          <div class="actions"><button class="btn">Open microphone settings</button></div>
+        </div>
+      </div>
+      <p class="note">The reason Flow wants the grant, and what it does not do with it, in the same
+      breath as the ask.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Unsupported Windows</b></div>
+      <div class="plate">
+        <div class="panel t-error">
+          <div class="row"><span class="dot"></span><span class="headline">Not available on this PC</span></div>
+          <div class="detail">Flow needs Windows 11 24H2 or newer for on-device speech.</div>
+        </div>
+      </div>
+      <p class="note">No button, because there is nothing the user can press that would help. Flow
+      does not quietly fall back to a cloud service.</p>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Cancelled</b> — fades after 1.2&nbsp;s</div>
+      <div class="plate">
+        <div class="panel t-idle">
+          <div class="row"><span class="dot"></span><span class="headline">Cancelled</span></div>
+          <div class="detail">Nothing was typed or kept.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Windows locked mid-press</b></div>
+      <div class="plate">
+        <div class="panel t-idle">
+          <div class="row"><span class="dot"></span><span class="headline">Cancelled</span></div>
+          <div class="detail">Windows locked, so Flow stopped listening.</div>
+        </div>
+      </div>
+      <p class="note">The lock screen eats the key-up edge. The watchdog in <code>HoldToTalkGate</code>
+      cancels rather than leaving a session held open forever.</p>
+    </div>
+  </div>
+
+  <h2>Light theme</h2>
+  <p class="sub">The panel follows the Windows app theme. Same layout, same copy, same one action.</p>
+  <div class="grid">
+    <div class="cell">
+      <div class="label"><b>Listening</b></div>
+      <div class="plate lightplate">
+        <div class="panel t-listening" data-theme="light" style="--panel-bg:rgba(249,249,249,.93);--panel-stroke:rgba(0,0,0,.08);--text-1:#1B1B1B;--text-2:rgba(0,0,0,.62);--text-3:rgba(0,0,0,.45);--fill-subtle:rgba(0,0,0,.04);--fill-stroke:rgba(0,0,0,.07);--status-rec:#C42B1C;">
+          <div class="row">
+            <span class="dot"></span>
+            <span class="headline">Listening</span>
+            <span class="wave"><i></i><i></i><i></i></span>
+          </div>
+          <div class="detail">Release to insert · Esc to cancel</div>
+          <div class="body provisional">let's move the review to Thursday<span class="caret"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="label"><b>Saved, not typed</b></div>
+      <div class="plate lightplate">
+        <div class="panel t-caution" style="--panel-bg:rgba(249,249,249,.93);--panel-stroke:rgba(0,0,0,.08);--text-1:#1B1B1B;--text-2:rgba(0,0,0,.62);--text-3:rgba(0,0,0,.45);--fill-subtle:rgba(0,0,0,.04);--fill-stroke:rgba(0,0,0,.07);--status-warn:#9D5D00;">
+          <div class="row"><span class="dot"></span><span class="headline">Saved, not typed</span></div>
+          <div class="detail">Focus moved to a different field, so Flow did not type there. Use Copy last.</div>
+          <div class="body">let's move the review to Thursday and I'll send the deck</div>
+          <div class="actions"><button class="btn">Copy last</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
